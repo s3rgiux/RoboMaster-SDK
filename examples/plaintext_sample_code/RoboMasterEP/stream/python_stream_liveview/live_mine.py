@@ -1,6 +1,8 @@
 #!python3
 
+import socket
 import sys
+
 sys.path.append('../decoder/ubuntu/output/')
 sys.path.append('../../connection/network/')
 
@@ -16,6 +18,12 @@ import pyaudio
 import robot_connection
 import enum
 import queue
+import socket
+
+host = "192.168.0.164"
+ctrl_port = 40923
+video_port = 40921
+audio_port = 40922
 
 
 class ConnectionType(enum.Enum):
@@ -30,8 +38,21 @@ class RobotLiveview(object):
     USB_DIRECT_IP = '192.168.42.2'
         
     def __init__(self, connection_type):
-        self.connection = robot_connection.RobotConnection()
+        self.connection_ctrl = socket.socket(socket.AF_INET, socket.SOCK_STREAM) # robot_connection.RobotConnection()
+        self.connection_audio = socket.socket(socket.AF_INET, socket.SOCK_STREAM) # robot_connection.RobotConnection()
+        self.connection_video = socket.socket(socket.AF_INET, socket.SOCK_STREAM) # robot_connection.RobotConnection()
         self.connection_type = connection_type
+        if self.connection_type is ConnectionType.WIFI_DIRECT:
+            robot_ip = RobotLiveview.WIFI_DIRECT_IP
+        elif self.connection_type is ConnectionType.WIFI_NETWORKING:
+            robot_ip = RobotLiveview.WIFI_NETWORKING_IP
+        elif self.connection_type is ConnectionType.USB_DIRECT:
+            robot_ip = RobotLiveview.USB_DIRECT_IP
+        print("using ip for connection : ")
+        print(robot_ip)
+        self.address_ctrl = (robot_ip, int(ctrl_port))
+        self.address_video = (robot_ip, int(video_port))
+        self.address_audio = (robot_ip, int(audio_port))
 
         self.video_decoder = libh264decoder.H264Decoder()
         libh264decoder.disable_logging()
@@ -51,36 +72,32 @@ class RobotLiveview(object):
         self.is_shutdown = True
 
     def open(self):
-        if self.connection_type is ConnectionType.WIFI_DIRECT:
-            self.connection.update_robot_ip(RobotLiveview.WIFI_DIRECT_IP)
-        elif self.connection_type is ConnectionType.USB_DIRECT:
-            self.connection.update_robot_ip(RobotLiveview.USB_DIRECT_IP)
-        elif self.connection_type is ConnectionType.WIFI_NETWORKING:
-            robot_ip = self.connection.get_robot_ip(timeout=10)  
-            if robot_ip:
-                self.connection.update_robot_ip(robot_ip)
-            else:
-                print('Get robot failed')
-                return False
-        self.is_shutdown = not self.connection.open()
-        
+        try:
+            print("trying my method to connect ctrl")
+            self.connection_ctrl.connect(self.address_ctrl)
+        except:
+            print("failed openning ctrl port")
+        print("success connection ctrl port")
+
     def close(self):
         self.is_shutdown = True
         self.video_decoder_thread.join()
         self.video_display_thread.join()
         self.audio_decoder_thread.join()
         self.audio_display_thread.join()
-        self.connection.close()
+        self.connection_ctrl.close()
+        self.connection_video.close()
+        self.connection_audio.close()
 
     def display(self):
-        self.command('command')
+        self.command('command;')
         print("Entered in SDK")
+        time.sleep(1)# -*- encoding: utf-8 -*-
+        self.command('audio on;')
         time.sleep(1)
-        self.command('audio on')
+        self.command('stream on;')
         time.sleep(1)
-        self.command('stream on')
-        time.sleep(1)
-        self.command('stream on')
+        self.command('stream on;')
 
         self.video_decoder_thread.start()
         self.video_display_thread.start()
@@ -93,7 +110,15 @@ class RobotLiveview(object):
     def command(self, msg):
         # TODO: TO MAKE SendSync()
         #       CHECK THE ACK AND SEQ
-        self.connection.send_data(msg)
+        # self.connection_ctrl.send_data(msg)
+        self.connection_ctrl.send(msg.encode('utf-8'))
+        try:
+            # Wait for the robot to return the execution result.
+            buf, addr = self.connection_ctrl.recvfrom(4096)
+            print(buf.decode('utf-8'))
+        except:
+            print("Error receiving :")
+            sys.exit(1)
 
     def _h264_decode(self, packet_data):
         res_frame_list = []
@@ -111,10 +136,15 @@ class RobotLiveview(object):
     def _video_decoder_task(self):
         package_data = b''
 
-        self.connection.start_video_recv()
+        # self.connection.start_video_recv()
+        try:
+            print("trying my method to connect video")
+            self.connection_video.connect(self.address_video)
+        except:
+            print("failed openning video port")
 
         while not self.is_shutdown: 
-            buff = self.connection.recv_video_data()
+            buff, addr = self.connection_video.recvfrom(4096)
             if buff:
                 package_data += buff
                 if len(buff) != 1460:
@@ -128,7 +158,7 @@ class RobotLiveview(object):
                             continue
                     package_data=b''
 
-        self.connection.stop_video_recv()
+        # self.connection_video.stop_video_recv()
 
     def _video_display_task(self):
         while not self.is_shutdown: 
@@ -147,10 +177,15 @@ class RobotLiveview(object):
     def _audio_decoder_task(self):
         package_data = b''
 
-        self.connection.start_audio_recv()
+        # self.connection.start_audio_recv()
+        try:
+            print("trying my method to connect audio")
+            self.connection_audio.connect(self.address_audio)
+        except:
+            print("failed openning audio port")
 
         while not self.is_shutdown: 
-            buff = self.connection.recv_audio_data()
+            buff, addr = self.connection_audio.recvfrom(4096) #recv_audio_data()
             if buff:
                 package_data += buff
                 if len(package_data) != 0:
@@ -165,7 +200,7 @@ class RobotLiveview(object):
                             continue
                     package_data=b''
 
-        self.connection.stop_audio_recv()
+        # self.connection.stop_audio_recv()
 
     def _audio_display_task(self):
 
